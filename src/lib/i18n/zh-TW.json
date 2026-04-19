@@ -1,0 +1,18 @@
+{
+  "app": {
+    "title": "標記未來",
+    "lang_btn": "EN",
+    "task_name": "事項名稱",
+    "task_placeholder": "例如：取消 Netflix 訂閱",
+    "quick_select": "快速選擇",
+    "days_later": "天後",
+    "test_10s": "10秒 (測試)",
+    "custom_date": "自訂日期",
+    "save_btn": "儲存提醒",
+    "update_btn": "更新提醒",
+    "my_tasks": "我的提醒",
+    "no_tasks": "目前沒有任何提醒。",
+    "edit": "編輯",
+    "delete": "刪除"
+  }
+}

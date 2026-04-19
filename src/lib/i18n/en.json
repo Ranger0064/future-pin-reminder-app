@@ -1,0 +1,18 @@
+{
+  "app": {
+    "title": "FuturePin",
+    "lang_btn": "中文",
+    "task_name": "Task Name",
+    "task_placeholder": "e.g., Cancel Netflix",
+    "quick_select": "Quick Select",
+    "days_later": "Days",
+    "test_10s": "10s (Test)",
+    "custom_date": "Custom Date",
+    "save_btn": "Save Reminder",
+    "update_btn": "Update Reminder",
+    "my_tasks": "My Reminders",
+    "no_tasks": "No reminders yet.",
+    "edit": "Edit",
+    "delete": "Delete"
+  }
+}

@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 1. 乾淨的原生系統背景 (類似 iOS 的淺灰) */
+body {
+  background-color: #F2F2F7; 
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #1C1C1E;
+}
+
+/* 2. 純白質感的原生卡片 */
+.native-card {
+  @apply bg-white rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-gray-100;
+}
+
+/* 3. 原生風格輸入框 */
+.native-input {
+  @apply bg-gray-50/50 border border-gray-200 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all rounded-xl px-4 py-3 w-full outline-none text-gray-800 placeholder-gray-400;
+}
+
+/* 4. 原生風格按鈕 */
+.native-btn {
+  @apply bg-white hover:bg-gray-50 border border-gray-200 shadow-sm transition-all rounded-xl text-gray-700 font-medium active:scale-95;
+}
+
+.native-btn-active {
+  @apply bg-blue-500 text-white border-blue-500 shadow-md hover:bg-blue-600;
+}
