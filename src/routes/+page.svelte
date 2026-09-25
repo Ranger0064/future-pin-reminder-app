@@ -3,6 +3,9 @@
   import { t, locale } from 'svelte-i18n';
   import { LocalNotifications } from '@capacitor/local-notifications';
   import { Preferences } from '@capacitor/preferences'; // 引入安全的本地儲存
+  import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'; // 匯出用：寫入暫存檔
+  import { Share } from '@capacitor/share'; // 匯出用：叫出系統分享清單
+  import { SplashScreen } from '@capacitor/splash-screen'; // 手動控制啟動畫面何時關閉，蓋住白屏空窗期
 
   // 狀態管理 
   let tasks =[]; 
@@ -12,6 +15,12 @@
   let selectedDays = null; 
   let customDate = '';     
   let isTestMode = false; 
+
+  // 通知權限狀態：'checking'（檢查中） | 'granted'（已開啟） | 'denied'（未開啟）
+  let notifStatus = 'checking';
+
+  // 匯入用的隱藏檔案選擇器參照
+  let fileInputEl;
 
   const dayOptions =[1, 3, 7, 30, 90, 180, 360];
 
@@ -66,33 +75,76 @@
     await Preferences.set({ key: 'futurepin_tasks', value: JSON.stringify(tasks) });
   };
 
+  // 檢查並請求通知權限（Android 13+ 起，通知需使用者手動同意才會顯示）
+  const checkAndRequestNotificationPermission = async () => {
+    try {
+      const current = await LocalNotifications.checkPermissions();
+      if (current.display === 'granted') {
+        notifStatus = 'granted';
+        return;
+      }
+      // 尚未詢問過，或先前被拒絕，這裡再主動請求一次
+      const result = await LocalNotifications.requestPermissions();
+      notifStatus = result.display === 'granted' ? 'granted' : 'denied';
+    } catch (e) {
+      // 網頁瀏覽器不支援此權限 API，不影響網頁預覽測試
+      console.log("Permission API not supported (web browser).");
+      notifStatus = 'granted';
+    }
+  };
+
+  // 讓使用者手動去系統設定開啟權限後，回來這裡按鈕重新檢查
+  const recheckPermission = () => checkAndRequestNotificationPermission();
+
+  // 保底：避免任何一步意外卡住（hang，不是報錯，是永遠沒有結果）導致啟動畫面永遠關不掉、
+  // 使用者完全進不了 App。設定一個時間上限，時間到了不管有沒有跑完，都強制放行繼續往下走。
+  const withTimeout = (promise, ms) =>
+    Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))]);
+
   // 初始化
   onMount(async () => {
-    // 從底層安全讀取任務
-    const { value } = await Preferences.get({ key: 'futurepin_tasks' });
-    if (value) tasks = JSON.parse(value);
+    // 這裡只做「畫面要出現前」真正必要的事：讀取任務資料 + 建立通知頻道。
+    // 通知「權限」檢查刻意移到最後面才做，原因見下方註解。
+    await withTimeout(
+      (async () => {
+        try {
+          // 從底層安全讀取任務
+          const { value } = await Preferences.get({ key: 'futurepin_tasks' });
+          if (value) tasks = JSON.parse(value);
 
-    // 請求通知權限
+          // 建立「最高重要性」的通知頻道
+          try {
+            await LocalNotifications.createChannel({
+              id: 'high_priority_channel',
+              name: 'High Priority Reminders',
+              description: 'Pops up on screen for urgent tasks',
+              importance: 5, // 5 = MAX (最高級別，允許彈出橫幅和發出聲音)
+              visibility: 1, // 1 = PUBLIC (鎖定螢幕時也能顯示)
+              vibration: true
+            });
+          } catch (e) {
+            console.log("Channel creation failed (maybe web browser)");
+          }
+        } catch (e) {
+          console.log("Init failed, continue booting anyway.", e);
+        }
+      })(),
+      4000 // 最多等 4 秒，時間到就不再等，直接放行，避免整個卡死
+    );
+
+    // 把啟動畫面收起來，讓使用者一定看得到主畫面
     try {
-      await LocalNotifications.requestPermissions();
+      await SplashScreen.hide();
     } catch (e) {
-      console.log("Web browser doesn't support notification permissions.");
+      // 網頁瀏覽器沒有這個原生功能，屬正常情況，不影響網頁預覽測試
+      console.log("SplashScreen.hide() skipped (web browser).");
     }
 
-        // 建立「最高重要性」的通知頻道
-    try {
-      await LocalNotifications.createChannel({
-        id: 'high_priority_channel',
-        name: 'High Priority Reminders',
-        description: 'Pops up on screen for urgent tasks',
-        importance: 5, // 5 = MAX (最高級別，允許彈出橫幅和發出聲音)
-        visibility: 1, // 1 = PUBLIC (鎖定螢幕時也能顯示)
-        vibration: true
-      });
-    } catch (e) {
-      console.log("Channel creation failed (maybe web browser)");
-    }
-
+    // 通知權限檢查刻意放在「啟動畫面關閉之後」才做：
+    // 系統要求通知權限的對話框只會疊加顯示在主畫面上面，不需要靠它才能讓使用者看到畫面。
+    // 如果放在啟動畫面關閉之前做，一旦這個對話框卡住沒有回應，使用者就會被鎖在啟動畫面出不去
+    // （這正是這次全新啟動圖示卡住問題的根因）。
+    checkAndRequestNotificationPermission();
   });
 
   // 輔助函數 
@@ -159,6 +211,11 @@
         await LocalNotifications.cancel({ notifications: [{ id: editingId }] });
       }
 
+      // 若權限尚未開啟，存檔前再確認一次（也許使用者剛去系統設定裡開啟）
+      if (notifStatus !== 'granted') {
+        await checkAndRequestNotificationPermission();
+      }
+
       await LocalNotifications.schedule({
         notifications:[
           {
@@ -190,7 +247,17 @@
       isTestMode = false;
       editingId = null;
 
-      showAlert($locale === 'zh-TW' ? '成功' : 'Success', $locale === 'zh-TW' ? '設定成功！' : 'Successfully set!');
+      // 若權限仍未開啟，順便在提示裡告知使用者，避免以為設定成功但收不到通知
+      if (notifStatus !== 'granted') {
+        showAlert(
+          $locale === 'zh-TW' ? '已儲存（通知未開啟）' : 'Saved (notifications off)',
+          $locale === 'zh-TW'
+            ? '事項已儲存，但通知權限尚未開啟，時間到了不會跳出提醒。請至系統設定開啟通知權限。'
+            : 'Saved, but notification permission is off — you will not see a reminder. Please enable it in system settings.'
+        );
+      } else {
+        showAlert($locale === 'zh-TW' ? '成功' : 'Success', $locale === 'zh-TW' ? '設定成功！' : 'Successfully set!');
+      }
 
     } catch (error) {
       console.error(error);
@@ -235,6 +302,144 @@
       }
     );
   };
+
+  // ------- 匯出／匯入：完全不經任何伺服器，資料自始至終留在使用者手上 -------
+
+  // 匯出：寫入 App 私有暫存檔 → 叫出系統分享清單，由使用者自行選擇要存到哪（雲端硬碟、Email、其他App等）
+  const exportData = async () => {
+    try {
+      const payload = {
+        app: 'FuturePin',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        tasks
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const fileName = `futurepin-backup-${getLocalToday()}.json`;
+
+      try {
+        // 手機環境：寫入 Cache 目錄，屬 App 私有空間，不需額外儲存權限
+        const { uri } = await Filesystem.writeFile({
+          path: fileName,
+          data: json,
+          directory: Directory.Cache,
+          encoding: Encoding.UTF8
+        });
+
+        await Share.share({
+          title: $locale === 'zh-TW' ? '匯出提醒資料' : 'Export Reminder Data',
+          text: $locale === 'zh-TW' ? '請選擇要儲存或傳送的位置' : 'Choose where to save or send this backup',
+          url: uri,
+          dialogTitle: $locale === 'zh-TW' ? '分享備份檔案' : 'Share backup file'
+        });
+      } catch {
+        // 網頁預覽環境沒有原生檔案系統，改用瀏覽器下載作為備援
+        const blob = new Blob([json], { type: 'application/json' });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(blobUrl);
+      }
+    } catch (error) {
+      console.error(error);
+      showAlert(
+        $locale === 'zh-TW' ? '匯出失敗' : 'Export Failed',
+        $locale === 'zh-TW' ? '請稍後再試一次。' : 'Please try again.'
+      );
+    }
+  };
+
+  // 點擊「匯入」按鈕時，觸發隱藏的檔案選擇器
+  const triggerImport = () => fileInputEl?.click();
+
+  // 匯入：讀檔 → 驗證格式 → 與現有清單合併 → 在「這台」裝置重新註冊尚未到期的通知
+  // （通知排程綁在裝置本身的系統層，換手機後必須重新註冊，舊手機排的通知不會自動搬過來）
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 清空，允許下次重複選同一個檔案
+    if (!file) return;
+
+    try {
+      const parsed = JSON.parse(await file.text());
+      const importedTasks = Array.isArray(parsed) ? parsed : parsed.tasks;
+
+      // 基本欄位驗證，避免匯入格式不符的檔案
+      const validTasks = (importedTasks || []).filter(
+        (t) => t && typeof t.id !== 'undefined' && typeof t.name === 'string' && typeof t.targetTime === 'number'
+      );
+
+      if (validTasks.length === 0) {
+        return showAlert(
+          $locale === 'zh-TW' ? '匯入失敗' : 'Import Failed',
+          $locale === 'zh-TW' ? '檔案格式不正確，請確認是本App匯出的備份檔。' : 'Invalid file format. Please use a backup exported from this app.'
+        );
+      }
+
+      showConfirm(
+        $locale === 'zh-TW' ? '匯入資料' : 'Import Data',
+        $locale === 'zh-TW'
+          ? `將匯入 ${validTasks.length} 筆提醒，與目前清單合併（相同項目將被覆蓋）。確定繼續嗎？`
+          : `This will import ${validTasks.length} reminder(s) and merge with your current list (matching items will be overwritten). Continue?`,
+        async () => {
+          // 匯入前再檢查一次通知權限，確保等下能成功排程
+          if (notifStatus !== 'granted') {
+            await checkAndRequestNotificationPermission();
+          }
+
+          const now = Date.now();
+          const merged = new Map(tasks.map((t) => [t.id, t])); // 用 id 去重合併
+          let scheduled = 0;
+          let expired = 0;
+
+          for (const t of validTasks) {
+            merged.set(t.id, t);
+
+            // 只有還沒到期的項目，才需要在這台裝置重新註冊系統通知
+            if (t.targetTime > now) {
+              try {
+                await LocalNotifications.schedule({
+                  notifications: [
+                    {
+                      title: $locale === 'zh-TW' ? '⏰ 你標記的未來，現在到了。' : '⏰ The future you marked is now today.',
+                      body: t.name,
+                      id: t.id,
+                      schedule: { at: new Date(t.targetTime) },
+                      sound: null,
+                      channelId: 'high_priority_channel'
+                    }
+                  ]
+                });
+                scheduled++;
+              } catch (err) {
+                console.log('Reschedule failed for task', t.id, err);
+              }
+            } else {
+              expired++; // 已過期：保留在清單供查看，但不重新排程
+            }
+          }
+
+          const finalTasks = Array.from(merged.values()).sort((a, b) => a.targetTime - b.targetTime);
+          await saveTasksToStorage(finalTasks);
+          closeModal();
+
+          showAlert(
+            $locale === 'zh-TW' ? '匯入完成' : 'Import Complete',
+            $locale === 'zh-TW'
+              ? `已重新排程 ${scheduled} 筆提醒，${expired} 筆已過期僅供查看。`
+              : `${scheduled} reminder(s) rescheduled. ${expired} already expired (kept for reference only).`
+          );
+        }
+      );
+    } catch (error) {
+      console.error(error);
+      showAlert(
+        $locale === 'zh-TW' ? '匯入失敗' : 'Import Failed',
+        $locale === 'zh-TW' ? '無法讀取這個檔案。' : 'Could not read this file.'
+      );
+    }
+  };
   
 </script>
 
@@ -249,7 +454,24 @@
 </div>
 
 <main class="container mx-auto px-4 max-w-md pb-12">
-  
+
+  <!-- 通知權限提示：未開啟時顯示，提醒使用者手動去系統設定開啟 -->
+  {#if notifStatus === 'denied'}
+    <div class="native-card p-4 mb-6 bg-yellow-50 border border-yellow-200">
+      <p class="font-bold text-yellow-800 mb-1">
+        {$locale === 'zh-TW' ? '⚠️ 通知權限未開啟' : '⚠️ Notifications are off'}
+      </p>
+      <p class="text-sm text-yellow-700 mb-3">
+        {$locale === 'zh-TW'
+          ? '尚未開啟通知權限，提醒時間到了不會跳出通知。請至「設定 → App → 本App → 通知」手動開啟，開啟後回來點下方按鈕重新檢查。'
+          : 'Notification permission is off, so reminders will not appear. Please enable it in Settings → Apps → this app → Notifications, then tap the button below.'}
+      </p>
+      <button class="native-btn px-3 py-1.5 text-xs" on:click={recheckPermission}>
+        🔄 {$locale === 'zh-TW' ? '重新檢查權限' : 'Re-check permission'}
+      </button>
+    </div>
+  {/if}
+
   <!-- 1. 新增/編輯 區塊 -->
   <div class="native-card p-6 mb-8">
     <h2 class="text-lg font-bold text-gray-800 mb-4">
@@ -295,8 +517,27 @@
 
   <!-- 2. 任務列表 區塊 -->
   <div>
-    <h3 class="text-md font-bold text-gray-500 mb-3 ml-1 uppercase tracking-wider">{$t('app.my_tasks')}</h3>
-    
+    <div class="flex justify-between items-center mb-3 ml-1 mr-1">
+      <h3 class="text-md font-bold text-gray-500 uppercase tracking-wider">{$t('app.my_tasks')}</h3>
+      <div class="flex gap-2">
+        <button class="native-btn px-2 py-1 text-xs" on:click={exportData}>
+          📤 {$locale === 'zh-TW' ? '匯出' : 'Export'}
+        </button>
+        <button class="native-btn px-2 py-1 text-xs" on:click={triggerImport}>
+          📥 {$locale === 'zh-TW' ? '匯入' : 'Import'}
+        </button>
+      </div>
+    </div>
+
+    <!-- 隱藏的檔案選擇器，供「匯入」按鈕觸發使用 -->
+    <input
+      type="file"
+      accept="application/json"
+      class="hidden"
+      bind:this={fileInputEl}
+      on:change={handleImportFile}
+    />
+
     {#if tasks.length === 0}
       <div class="text-center py-8 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
         {$t('app.no_tasks')}
