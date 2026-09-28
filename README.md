@@ -22,7 +22,7 @@ FuturePin is a reminder app built for scenarios like subscription renewals, warr
 - **No backend, zero servers**: the app never sends your data anywhere; your reminders are visible only to you
 - **Export/import backup**: when switching phones, export your data to a file and transfer it however you like (cloud drive, email, USB, etc.), then import it on the new device — nothing gets lost
 - **Notification permission prompt**: if notification permission is off, the app shows a banner with a one-tap re-check button
-- **Bilingual UI**: switch between Traditional Chinese and English
+- **Bilingual UI**: switch between English and Traditional Chinese
 - **Notification test**: a built-in "test in 10 seconds" option to quickly verify notifications work on your phone
 
 ### Privacy by design
