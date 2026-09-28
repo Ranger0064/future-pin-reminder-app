@@ -19,6 +19,11 @@
   // 通知權限狀態：'checking'（檢查中） | 'granted'（已開啟） | 'denied'（未開啟）
   let notifStatus = 'checking';
 
+  // 精確鬧鐘系統設定狀態（Android 12+ 專屬，跟上面的「通知權限」是完全不同的兩個開關！
+  // 這個沒開，鬧鐘會被系統依電量管理策略延後觸發，例如螢幕熄滅、Doze 深度睡眠時）：
+  // 'unsupported'（Android 12 以下或網頁，視為不影響） | 'granted'（已開啟） | 'denied'（未開啟）
+  let exactAlarmStatus = 'unsupported';
+
   // 匯入用的隱藏檔案選擇器參照
   let fileInputEl;
 
@@ -96,6 +101,30 @@
   // 讓使用者手動去系統設定開啟權限後，回來這裡按鈕重新檢查
   const recheckPermission = () => checkAndRequestNotificationPermission();
 
+  // 檢查「精確鬧鐘」系統設定（Android 12+ 專屬）。
+  // 這個關掉的話，就算通知權限開著，鬧鐘一樣會被系統延後，常見症狀：
+  // 螢幕熄滅時不會準時推播，要等使用者手動點亮螢幕才補發。
+  const checkExactAlarmSetting = async () => {
+    try {
+      const result = await LocalNotifications.checkExactNotificationSetting();
+      exactAlarmStatus = result.exact_alarm; // 'granted' | 'denied'
+    } catch (e) {
+      // Android 12 以下或網頁環境沒有這個設定項目，視為不影響
+      console.log("checkExactNotificationSetting not supported.", e);
+      exactAlarmStatus = 'unsupported';
+    }
+  };
+
+  // 直接帶使用者跳到系統的「鬧鐘與提醒」設定頁面
+  const openExactAlarmSetting = async () => {
+    try {
+      const result = await LocalNotifications.changeExactNotificationSetting();
+      exactAlarmStatus = result.exact_alarm;
+    } catch (e) {
+      console.log("changeExactNotificationSetting not supported.", e);
+    }
+  };
+
   // 保底：避免任何一步意外卡住（hang，不是報錯，是永遠沒有結果）導致啟動畫面永遠關不掉、
   // 使用者完全進不了 App。設定一個時間上限，時間到了不管有沒有跑完，都強制放行繼續往下走。
   const withTimeout = (promise, ms) =>
@@ -145,6 +174,9 @@
     // 如果放在啟動畫面關閉之前做，一旦這個對話框卡住沒有回應，使用者就會被鎖在啟動畫面出不去
     // （這正是這次全新啟動圖示卡住問題的根因）。
     checkAndRequestNotificationPermission();
+
+    // 精確鬧鐘設定只是「檢查」現況，不會跳系統對話框，所以不用擔心卡住問題，可以放心一起做
+    checkExactAlarmSetting();
   });
 
   // 輔助函數 
@@ -222,7 +254,7 @@
             title: ($locale === 'zh-TW' ? "⏰ 你標記的未來，現在到了。" : "⏰ The future you marked is now today."),
             body: taskName,
             id: taskId,
-            schedule: { at: targetDate },
+            schedule: { at: targetDate, allowWhileIdle: true },
             sound: null, 
             channelId: 'high_priority_channel'
           }
@@ -405,7 +437,7 @@
                       title: $locale === 'zh-TW' ? '⏰ 你標記的未來，現在到了。' : '⏰ The future you marked is now today.',
                       body: t.name,
                       id: t.id,
-                      schedule: { at: new Date(t.targetTime) },
+                      schedule: { at: new Date(t.targetTime), allowWhileIdle: true },
                       sound: null,
                       channelId: 'high_priority_channel'
                     }
@@ -468,6 +500,24 @@
       </p>
       <button class="native-btn px-3 py-1.5 text-xs" on:click={recheckPermission}>
         🔄 {$locale === 'zh-TW' ? '重新檢查權限' : 'Re-check permission'}
+      </button>
+    </div>
+  {/if}
+
+  <!-- 精確鬧鐘設定提示：Android 12+ 專屬，跟上面的通知權限是不同的系統開關。
+       這個沒開，鬧鐘會被系統依省電策略延後（例如螢幕熄滅、Doze 模式時）才觸發。 -->
+  {#if exactAlarmStatus === 'denied'}
+    <div class="native-card p-4 mb-6 bg-orange-50 border border-orange-200">
+      <p class="font-bold text-orange-800 mb-1">
+        {$locale === 'zh-TW' ? '⚠️ 精確鬧鐘尚未開啟' : '⚠️ Exact alarms are off'}
+      </p>
+      <p class="text-sm text-orange-700 mb-3">
+        {$locale === 'zh-TW'
+          ? '這是跟「通知權限」不同的另一個系統設定，沒開的話，提醒可能會被系統延後，例如螢幕熄滅或App被系統關閉時不會準時提醒，要等你打開螢幕或重新打開App才會補發。'
+          : 'This is a separate system setting from notification permission. Without it, reminders may be delayed by the system — e.g. not firing while the screen is off or the app has been closed, only appearing once you turn on the screen or reopen the app.'}
+      </p>
+      <button class="native-btn px-3 py-1.5 text-xs" on:click={openExactAlarmSetting}>
+        ⚙️ {$locale === 'zh-TW' ? '前往開啟' : 'Open settings'}
       </button>
     </div>
   {/if}
